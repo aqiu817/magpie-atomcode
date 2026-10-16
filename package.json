@@ -1,0 +1,57 @@
+{
+  "name": "magpie-atomcode",
+  "version": "0.1.0",
+  "description": "ATOMCODE for Magpie: AtomCode (AtomGit CodingPlan) as a provider — browser OAuth sign-in, atomcode-signing-v1 signed requests, native daily check-in (plan claim), and the 5-hour quota window on every account row",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "internal.mjs",
+    "sign.mjs",
+    "oauth.mjs",
+    "codingplan.mjs",
+    "quota.mjs",
+    "models.mjs",
+    "i18n.mjs",
+    "version.mjs",
+    "assets/",
+    "README.md",
+    "README.zh-CN.md",
+    "NOTICE.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "magpie",
+    "magpie-plugin",
+    "opencode",
+    "opencode-plugin",
+    "opencode-auth",
+    "opencode-provider",
+    "atomcode",
+    "atomgit",
+    "codingplan",
+    "openai-compatible"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aqiu817/magpie-atomcode.git"
+  },
+  "homepage": "https://github.com/aqiu817/magpie-atomcode#readme",
+  "bugs": {
+    "url": "https://github.com/aqiu817/magpie-atomcode/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "magpie": {
+    "icon": "https://atomgit.com/favicon.ico",
+    "maxConcurrency": 4
+  }
+}
