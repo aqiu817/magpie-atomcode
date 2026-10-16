@@ -1,7 +1,7 @@
 # magpie-atomcode 插件制作规划
 
-- 版本：v1.4（2026-10-16）
-- 状态：**M3 全绿 + 签到（checkin 钩子）已实现**（27/27 单测、沙箱与真机 magpie 均识别 `checkin=true`）；M4 打磨与 M5 发布待启动
+- 版本：v1.5（2026-10-16）
+- 状态：**已发布 GitHub（M5 路线 A 部分完成）**——仓库 https://github.com/aqiu817/magpie-atomcode ，main 分支，topic `magpie-plugin`（另附 atomcode/atomgit/codingplan/opencode）；README 默认英文（中文移至 README.zh-CN.md）；显示名 ATOMCODE；27/27 单测、真机 checkin=true。剩余可选：npm 发布与 registry.json PR、深度单测补全
 - 目标产物：magpie 供应商插件 `magpie-atomcode` —— 让所有 Agent 通过 magpie 使用 AtomCode（AtomGit CodingPlan）的模型，写作 `atomcode/<模型>`
 
 ---
