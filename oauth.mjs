@@ -22,7 +22,11 @@
  * @module magpie-atomcode/oauth
  */
 
-import { DEFAULT_CLIENT_VERSION } from "./internal.mjs";
+import {
+  DEFAULT_CLIENT_VERSION,
+  readCappedResponseText,
+  trustedURL,
+} from "./internal.mjs";
 
 /** Trailing slashes lie about URLs; trim once here. */
 const withBase = (base, path) => `${String(base).replace(/\/+$/, "")}/${path}`;
@@ -60,6 +64,7 @@ async function call(
 ) {
   const res = await fetchImpl(withBase(base, path), {
     method,
+    redirect: "error",
     headers: {
       accept: "application/json",
       "user-agent": userAgentOf(clientVersion),
@@ -68,7 +73,7 @@ async function call(
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(timeoutMs),
   });
-  const text = await res.text().catch(() => "");
+  const text = await readCappedResponseText(res, { label: "OAuth broker response" });
   if (!res.ok) {
     const error = new Error(`broker returned ${res.status}: ${text.slice(0, 200) || "empty response"}`);
     error.status = res.status;
@@ -91,7 +96,13 @@ export async function startLogin(base, opts = {}) {
   if (!r?.login_url || !r?.state) {
     throw new Error("OAuth broker returned an incomplete login session");
   }
-  return { loginUrl: stripForceLogin(r.login_url), state: String(r.state) };
+  const loginUrl = trustedURL(stripForceLogin(r.login_url), {
+    domains: ["atomgit.com"],
+    allowSearch: true,
+    allowHash: true,
+  });
+  if (!loginUrl) throw new Error("OAuth broker returned an untrusted login URL");
+  return { loginUrl, state: String(r.state) };
 }
 
 /** Has the user finished signing in on the browser side? */

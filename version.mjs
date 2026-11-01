@@ -14,8 +14,8 @@
  *     `ua.go` reads); it is fetched with a short timeout and validated strict;
  *   - a TTL cache (12 h) plus a short failure retry window (5 min) keep the
  *     network load at one GET per host process, retrying quietly;
- *   - `ensure()` can block once per host process at most (cold start); every
- *     later failure just keeps the last known version;
+ *   - `ensure()` never waits for the network; it starts one background refresh
+ *     and immediately returns the last known version;
  *   - the fallback is the built-in anchor constant, so an unreachable manifest
  *     degrades to exactly the behavior we shipped and verified live.
  *
@@ -27,6 +27,8 @@
  * @module magpie-atomcode/version
  */
 
+import { readCappedResponseText } from "./internal.mjs";
+
 /** Atom2Api `ua.go` 同款 URL：官方仓库的 workspace 声明。 */
 export const ATOMCODE_CARGO_URL = "https://raw.atomgit.com/atomgit_atomcode/atomcode/raw/main/Cargo.toml";
 
@@ -34,7 +36,7 @@ export const ATOMCODE_CARGO_URL = "https://raw.atomgit.com/atomgit_atomcode/atom
 export const VERSION_TTL_MS = 12 * 3600_000;
 /** …and after a failed fetch we stay quiet (and on the cached value) for… */
 export const VERSION_FAIL_TTL_MS = 5 * 60_000;
-/** Bounded wait for the manifest fetch (once per host process, cold start). */
+/** HTTP timeout for one background manifest fetch. */
 export const VERSION_TIMEOUT_MS = 10_000;
 
 /** Upstream reads `workspace.package.version` (go-toml), semantic. */
@@ -86,12 +88,15 @@ export async function fetchAtomCodeVersion({
   timeoutMs = VERSION_TIMEOUT_MS,
 } = {}) {
   const res = await fetchImpl(url, {
+    redirect: "error",
     headers: { accept: "text/plain" },
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`AtomCode manifest returned ${res.status}`);
-  const text = await res.text();
-  if (text.length > MAX_MANIFEST_BYTES) throw new Error("AtomCode manifest exceeds 1 MiB");
+  const text = await readCappedResponseText(res, {
+    maxBytes: MAX_MANIFEST_BYTES,
+    label: "AtomCode manifest",
+  });
   const version = extractVersionFromManifest(text);
   if (!version) throw new Error("AtomCode manifest has no valid workspace.package.version");
   return version;
@@ -117,7 +122,6 @@ export function createVersionSource({
   // at=0 means "stale", which is what makes the first ensure()/poke() fetch.
   const cache = { at: 0, version: fallback ?? "0.0.0" };
   let failedAt = 0;
-  let filled = false; // has this host process ever completed one fetch (success or fail)?
   let inflight = null;
 
   async function refresh() {
@@ -127,11 +131,9 @@ export function createVersionSource({
         const version = await fetchAtomCodeVersion({ url, fetchImpl, timeoutMs });
         cache.at = Date.now();
         cache.version = version;
-        filled = true;
         failedAt = 0;
         return version;
       } catch (error) {
-        filled = true; // 冷启动最多等一次，此后一律不阻塞
         failedAt = Date.now();
         try {
           onError?.(error);
@@ -161,17 +163,13 @@ export function createVersionSource({
     /**
      * Best-effort current version.
      *
-     * Fresh cache → immediate. Cold start (first use in this host process) →
-     * bounded wait for one fetch. Anything else → background refresh, answer
-     * now with the cached value. Never throws.
+     * Always immediate: start one background refresh when stale and answer with
+     * the current cached version. The host-start poke normally completes before
+     * the first request, while an offline manifest can never delay it.
      */
     async ensure() {
       if (fresh()) return cache.version;
       if (quiet()) return cache.version;
-      if (!filled) {
-        await refresh();
-        return cache.version;
-      }
       if (!inflight) refresh().catch(() => {});
       return cache.version;
     },

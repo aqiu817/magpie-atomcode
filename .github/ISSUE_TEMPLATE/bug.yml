@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a reproducible plugin failure without sharing credentials.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste access tokens, refresh tokens, state values, `plugin-auth.json`, or unredacted home-directory paths.
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Failure stage
+      options:
+        - Sign-in or OAuth callback
+        - Model catalog
+        - Chat completion or streaming
+        - Quota or check-in
+        - Plugin installation or loading
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: magpie-version
+    attributes:
+      label: magpie version
+      placeholder: Output of `magpie version`
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS, Node/Bun, and plugin version
+      placeholder: macOS 15, Node 22.18, magpie-atomcode 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: List the exact commands and UI actions in order.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      description: Remove tokens, auth state, email addresses, account IDs, trace IDs, and local usernames.
+      render: text
+  - type: dropdown
+    id: official-client
+    attributes:
+      label: Does the official AtomCode client work with the same account?
+      options:
+        - Not tested
+        - Yes
+        - No, it also fails
+    validations:
+      required: true

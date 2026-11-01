@@ -18,13 +18,32 @@
  */
 
 import { fetchStatus, fetchModels, planOf, planTier } from "./codingplan.mjs";
-import { DEFAULT_GATEWAY_BASE_URL } from "./internal.mjs";
+import { DEFAULT_GATEWAY_BASE_URL, trustedURL } from "./internal.mjs";
 
 /** The AI SDK package that speaks the OpenAI-compatible dialect. */
 export const NPM = "@ai-sdk/openai-compatible";
 
 /** LLM gateway root; loader requests and `api.url` default to it. */
 export const DEFAULT_BASE_URL = DEFAULT_GATEWAY_BASE_URL;
+
+/** The only origin loader.fetch permits for signed model traffic. */
+export const TRUSTED_MODEL_ORIGIN = new URL(DEFAULT_BASE_URL).origin;
+
+/**
+ * Validate an upstream-supplied model `base_url`.
+ *
+ * Accepts only https, no embedded credentials, and the exact gateway origin that
+ * loader.fetch permits. Keeping both checks on the same origin prevents a model
+ * from being advertised and then rejected at request time.
+ *
+ * @param {unknown} value
+ * @returns {string|undefined} the trimmed URL, or undefined when unusable.
+ */
+export function trustedModelBaseURL(value) {
+  const accepted = trustedURL(value, { domains: ["atomgit.com"] });
+  if (!accepted) return undefined;
+  return new URL(accepted).origin === TRUSTED_MODEL_ORIGIN ? accepted : undefined;
+}
 
 /** Upstream `defaults 64000` when a row lacks a context window (Atom2Api 同款兜底). */
 export const DEFAULT_CONTEXT = 64000;
@@ -67,14 +86,27 @@ export const FALLBACK_MODELS = [
 /**
  * Normalize one `models-v2` row (or a `FALLBACK_MODELS` entry, same shape).
  *
+ * `onReject` is called when the row carried a `base_url` that was refused by
+ * {@link trustedModelBaseURL}, so the caller can say so instead of silently
+ * routing the model somewhere else.
+ *
  * @returns {{id: string, key: string, context: number, output: number, levels: string[], vision: boolean, type: string, baseURL?: string}|null}
  */
-export function normalizeCodingPlanModel(raw = {}, { output = DEFAULT_OUTPUT } = {}) {
+export function normalizeCodingPlanModel(raw = {}, { output = DEFAULT_OUTPUT, onReject } = {}) {
   const id = typeof raw.display_model_name === "string" ? raw.display_model_name.trim() : "";
   if (!id) return null;
   const levels = Array.isArray(raw.reasoning_effort_levels)
     ? raw.reasoning_effort_levels.filter((l) => typeof l === "string" && l.trim()).map((l) => l.trim())
     : [];
+  const declaredBaseURL = typeof raw.base_url === "string" ? raw.base_url.trim() : "";
+  const baseURL = declaredBaseURL ? trustedModelBaseURL(declaredBaseURL) : undefined;
+  if (declaredBaseURL && baseURL === undefined) {
+    try {
+      onReject?.(declaredBaseURL);
+    } catch {
+      /* the reporter is best-effort */
+    }
+  }
   return {
     id,
     key: sanitizeModelKey(id),
@@ -83,7 +115,7 @@ export function normalizeCodingPlanModel(raw = {}, { output = DEFAULT_OUTPUT } =
     levels,
     vision: raw.supports_vision === true,
     type: typeof raw.type === "string" && raw.type ? raw.type : "openai",
-    baseURL: typeof raw.base_url === "string" && raw.base_url ? raw.base_url : undefined,
+    baseURL,
   };
 }
 
@@ -138,7 +170,7 @@ export function toProviderModel(m = {}, providerID, { baseURL = DEFAULT_BASE_URL
  * share a cache entry. Errors propagate — including `signIn: "expired"` ones —
  * so the provider hook decides between fallback and account marking.
  *
- * @param {{apiBase: string, clientVersion: string, timeoutMs?: number, ttlMs?: number, output?: number, fetchImpl?: Function}} opts
+ * @param {{apiBase: string, clientVersion: string, timeoutMs?: number, ttlMs?: number, output?: number, fetchImpl?: Function, onReject?: Function}} opts
  */
 export function createCatalog({
   apiBase,
@@ -147,6 +179,7 @@ export function createCatalog({
   ttlMs = MODELS_TTL_MS,
   output = DEFAULT_OUTPUT,
   fetchImpl,
+  onReject,
 } = {}) {
   const cache = new Map();
   const inflight = new Map();
@@ -168,7 +201,7 @@ export function createCatalog({
       const tier = planTier(planOf(status)?.plan_name);
       const rows = await fetchModels(apiBase, credentials.access, tier, { fetchImpl, clientVersion: version, timeoutMs });
       const models = rows
-        .map((row) => normalizeCodingPlanModel(row, { output: outputOverride }))
+        .map((row) => normalizeCodingPlanModel(row, { output: outputOverride, onReject }))
         .filter(Boolean);
       if (models.length) cache.set(key, { at: Date.now(), models });
       return models;

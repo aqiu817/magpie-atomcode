@@ -32,13 +32,22 @@ test("fetchAtomCodeVersion：正常返回版本，非 2xx 抛错", async () => {
   );
 });
 
-test("版本源：冷启动 ensure 等到真实结果；此前 get() 返回兜底", async () => {
+test("版本源：冷启动 ensure 立即返回兜底，后台完成后再升级", async () => {
+  let finish;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
   const src = createVersionSource({
     fallback: "5.2.3",
-    fetchImpl: async () => new Response('[workspace.package]\nversion = "6.0.1"\n'),
+    fetchImpl: async () => {
+      await pending;
+      return new Response('[workspace.package]\nversion = "6.0.1"\n');
+    },
   });
   assert.equal(src.get(), "5.2.3");
-  assert.equal(await src.ensure(), "6.0.1");
+  assert.equal(await src.ensure(), "5.2.3");
+  finish();
+  await waitFor(() => src.get() === "6.0.1");
   assert.equal(src.get(), "6.0.1");
 });
 
@@ -74,6 +83,34 @@ test("拉取失败：退回兜底、标记 quiet，失败窗口内不再碰网�
   assert.deepEqual(logs, ["offline"]);
 });
 
+test("fetchAtomCodeVersion：超过 1 MiB 的清单边读边停，不会先整块吃下", async () => {
+  let pulls = 0;
+  const chunk = new Uint8Array(64 * 1024);
+  const stream = new ReadableStream({
+    pull(controller) {
+      pulls += 1;
+      if (pulls > 200) return controller.close();
+      controller.enqueue(chunk);
+      return undefined;
+    },
+  });
+  await assert.rejects(
+    fetchAtomCodeVersion({ fetchImpl: async () => new Response(stream, { status: 200 }) }),
+    /exceeds 1 MiB/,
+  );
+  // 1 MiB / 64 KiB = 16 块；读到第 17 块就该中止，远不到 200。
+  assert.ok(pulls <= 30, `应在越过上限时立刻停止读取，实际读了 ${pulls} 块`);
+});
+
+test("fetchAtomCodeVersion：上限之内的较大清单仍能解析出真实版本", async () => {
+  const padding = "#".repeat(200 * 1024);
+  const text = `[workspace.package]\nversion = "6.1.0"\n${padding}\n`;
+  const version = await fetchAtomCodeVersion({
+    fetchImpl: async () => new Response(text, { status: 200 }),
+  });
+  assert.equal(version, "6.1.0");
+});
+
 test("poke：后台拉取完成后 get() 升级（宿主常驻场景）", async () => {
   const src = createVersionSource({
     fallback: "5.2.3",
@@ -84,3 +121,11 @@ test("poke：后台拉取完成后 get() 升级（宿主常驻场景）", async 
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(src.get(), "6.0.0");
 });
+
+async function waitFor(predicate, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition was not met before timeout");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
