@@ -20,7 +20,9 @@
     "assets/",
     "README.md",
     "README.zh-CN.md",
+    "CHANGELOG.md",
     "NOTICE.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "keywords": [
@@ -48,7 +50,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:coverage": "node --experimental-test-coverage --test test/*.test.mjs",
+    "test:coverage:enforce": "node --experimental-test-coverage --test-coverage-lines=85 --test-coverage-branches=75 --test-coverage-functions=85 --test test/*.test.mjs",
+    "pack:check": "npm pack --dry-run --json"
   },
   "magpie": {
     "icon": "https://atomgit.com/favicon.ico",

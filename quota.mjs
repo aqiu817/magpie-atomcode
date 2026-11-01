@@ -1,10 +1,10 @@
 /**
  * CodingPlan status → Magpie `auth.usage` mapping.
  *
- * The plan's own fields supply `plan` (套餐名) and `until` (到期时间); the first
- * `rate_limit_windows` entry supplies the one window this platform really has
- * (the rolling 5-hour call window). `auth.usage` percentages may legitimately
- * exceed 100 when the quota is exhausted — Magpie renders that natively.
+ * The plan's own fields supply `plan` (套餐名) and `until` (到期时间); every
+ * `rate_limit_windows` row is mapped so additional windows from upstream are
+ * not silently discarded. `auth.usage` percentages may legitimately exceed 100
+ * when the quota is exhausted — Magpie renders that natively.
  *
  * Mapping is a pure function so the shape contract can be tested offline
  * against the real response captured in the plan document (§5.4).
@@ -40,25 +40,28 @@ export function quotaFromStatus(status, t, { user } = {}) {
   const usage = status?.current_usage ?? {};
   const windows = [];
 
-  const raw = Array.isArray(status?.rate_limit_windows) ? status.rate_limit_windows.find((w) => w && typeof w === "object") : null;
-  if (raw) {
+  const rawWindows = Array.isArray(status?.rate_limit_windows)
+    ? status.rate_limit_windows.filter((w) => w && typeof w === "object")
+    : [];
+  for (const raw of rawWindows) {
     const limit = num(raw.call_limit);
     const span = num(raw.window_size_seconds) ?? (num(raw.window_hours) ?? 5) * 3600;
-    const hours = num(raw.window_hours) ?? Math.round(span / 3600) ?? 5;
+    const hours = num(raw.window_hours) ?? Math.round(span / 3600);
     windows.push({
       name: fill(t.windowHours, { hours }),
-      used: num(usage.usage_percent) ?? pctOf(raw.calls_used, raw.call_limit) ?? 0,
+      used: num(raw.usage_percent) ?? num(usage.usage_percent) ?? pctOf(raw.calls_used, raw.call_limit) ?? 0,
       span,
       amount: num(raw.calls_used) ?? 0,
       unit: "calls",
       ...(limit ? { limit, display: fill(t.callsOf, { used: num(raw.calls_used) ?? 0, total: limit }) } : {}),
       ...(num(raw.seconds_until_reset) !== undefined
         ? { resetSecs: num(raw.seconds_until_reset) }
-        : usage.reset_at
-          ? { resetsAt: usage.reset_at }
+        : raw.reset_at || usage.reset_at
+          ? { resetsAt: raw.reset_at || usage.reset_at }
           : {}),
     });
-  } else if (num(usage.usage_percent) !== undefined || num(usage.window_token_limit) !== undefined) {
+  }
+  if (!rawWindows.length && (num(usage.usage_percent) !== undefined || num(usage.window_token_limit) !== undefined)) {
     // No window row (older shape?): fall back to the current_usage block.
     const hours = num(usage.window_hours) ?? 5;
     windows.push({

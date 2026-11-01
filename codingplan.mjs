@@ -18,7 +18,7 @@
  * @module magpie-atomcode/codingplan
  */
 
-import { DEFAULT_CLIENT_VERSION } from "./internal.mjs";
+import { DEFAULT_CLIENT_VERSION, readCappedResponseText } from "./internal.mjs";
 
 const withBase = (base, path) => `${String(base).replace(/\/+$/, "")}/${path}`;
 
@@ -80,6 +80,7 @@ async function request(
 ) {
   const res = await fetchImpl(withBase(base, path), {
     method: "GET",
+    redirect: "error",
     headers: {
       accept: "application/json",
       authorization: `Bearer ${token}`,
@@ -87,7 +88,7 @@ async function request(
     },
     signal: AbortSignal.timeout(timeoutMs),
   });
-  const text = await res.text().catch(() => "");
+  const text = await readCappedResponseText(res, { label: "CodingPlan response" });
   if (!res.ok) {
     const error = new Error(`CodingPlan returned ${res.status}: ${text.slice(0, 200) || "empty response"}`);
     error.status = res.status;
@@ -141,7 +142,7 @@ export async function fetchModels(base, token, tier, opts = {}) {
 export async function claimCodingPlan(
   base,
   token,
-  { fetchImpl = (...args) => fetch(...args), clientVersion = DEFAULT_CLIENT_VERSION, timeoutMs = 20_000 } = {},
+  { fetchImpl = (...args) => fetch(...args), clientVersion = DEFAULT_CLIENT_VERSION, timeoutMs = 8_000 } = {},
 ) {
   let lastMessage = "no Coding Plan tier is currently available";
   const attempts = [];
@@ -152,6 +153,7 @@ export async function claimCodingPlan(
     try {
       const res = await fetchImpl(withBase(base, "coding-plan/claim-v2"), {
         method: "POST",
+        redirect: "error",
         headers: {
           accept: "application/json",
           authorization: `Bearer ${token}`,
@@ -162,7 +164,7 @@ export async function claimCodingPlan(
         signal: AbortSignal.timeout(timeoutMs),
       });
       status = res.status;
-      raw = await res.text().catch(() => "");
+      raw = await readCappedResponseText(res, { label: "CodingPlan claim response" });
       try {
         response = JSON.parse(raw);
       } catch {
@@ -171,7 +173,7 @@ export async function claimCodingPlan(
     } catch (error) {
       attempts.push({ tier, httpStatus: 0, success: false, duplicate: false, message: error.message });
       lastMessage = error.message;
-      continue;
+      return { claimed: false, duplicate: false, tier: "", planName: "", message: lastMessage, attempts };
     }
     const success = status >= 200 && status < 300 && response?.success === true;
     const duplicate = status >= 200 && status < 300 && response?.duplicate === true;
@@ -193,6 +195,11 @@ export async function claimCodingPlan(
         message,
         attempts,
       };
+    }
+    // A transport/auth/rate-limit failure affects every tier. Only an
+    // entitlement-shaped rejection is worth cascading to the next tier.
+    if (![400, 404, 409, 422].includes(status)) {
+      return { claimed: false, duplicate: false, tier: "", planName: "", message, attempts };
     }
     if (message) lastMessage = message;
   }

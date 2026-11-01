@@ -29,6 +29,7 @@ const ZH = {
   reclaimed: "套餐已重新领取：{plan}",
   reclaimFailed: "自动重领未成功：{detail}",
   checkinDone: "套餐仍有效，无需重领",
+  checkinDoneWithPlan: "套餐仍有效，无需重领（{plan}）",
 
 
   usageHttp: "读取额度失败 HTTP {status}",
@@ -40,6 +41,11 @@ const ZH = {
 
   modelsUnavailable: "模型目录暂时不可用，沿用内置列表",
   modelListEmpty: "模型目录为空（计划可能未领取），沿用内置列表",
+  modelBaseUrlDenied: "模型自带地址 {detail} 不在白名单，已改用官方网关",
+  modelKeyCollision: "模型 key {detail} 冲突，已改用 {key}",
+  endpointDenied: "配置项 {name} 的地址 {detail} 不被接受，已改用官方端点",
+  optionInvalid: "配置项 {name} 的值 {detail} 无效，已改用默认值",
+  foreignTargetBlocked: "已拦截请求：目标 {origin} 不是 AtomCode 官方网关",
 };
 
 const EN = {
@@ -60,6 +66,7 @@ const EN = {
   reclaimed: "Plan reclaimed: {plan}",
   reclaimFailed: "Automatic re-claim failed: {detail}",
   checkinDone: "The plan is still active; nothing new to claim",
+  checkinDoneWithPlan: "The plan is still active; nothing to claim ({plan})",
 
 
   usageHttp: "Reading the quota failed with HTTP {status}",
@@ -71,6 +78,11 @@ const EN = {
 
   modelsUnavailable: "The model catalog is unavailable; keeping the built-in list",
   modelListEmpty: "The model catalog is empty (the plan may need claiming); keeping the built-in list",
+  modelBaseUrlDenied: "A model asked for {detail}, which is not allowlisted; using the official gateway instead",
+  modelKeyCollision: "Model key {detail} collided; using {key} instead",
+  endpointDenied: "Option {name} pointed at {detail}, which is not accepted; using the official endpoint instead",
+  optionInvalid: "Option {name} had invalid value {detail}; using the default",
+  foreignTargetBlocked: "Blocked a request to {origin}: it is not the AtomCode gateway",
 };
 
 const TABLES = { zh: ZH, en: EN };

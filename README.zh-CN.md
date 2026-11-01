@@ -17,7 +17,7 @@ https://llm-api.atomgit.com/v1（OpenAI 兼容，SSE 原样流回）
 
 ## 功能
 
-- **浏览器 OAuth 登录**：一次授权完成登录 + 申领套餐（官方 `/login` 同款语义）；多账号可重复登录，token 由 magpie 保管并自动续期（magpie ≥ 0.1.684；旧版在请求时兜底刷新）。
+- **浏览器 OAuth 登录**：一次授权完成登录，并在后台启动官方 `/login` 同款套餐申领；多账号可重复登录，token 由 magpie 保管并自动续期（magpie ≥ 0.1.684；旧版在请求时兜底刷新）。
 - **直连 AtomGit**：不需要 Atom2Api 常驻；流式、工具调用、推理档位（`reasoning_effort`）全部可用（M3 真机逐项验证）。
 - **每日签到（checkin）**：magpie 原生签到开关调度。套餐有效 → done；到期/缺失 → 按官方 Max→Pro→Lite 级联自动重领；名额满 → failed 并显示上游原因。
 - **额度窗口**：账号行与 `magpie quota` 显示套餐名、到期时间、5 小时窗口（调用次数口径），实时更新。
@@ -67,19 +67,54 @@ magpie plugin login atomcode   # 浏览器完成 AtomGit 授权，自动回到�
 | `quotaTtlMs` | `60000` | 额度缓存时长 |
 | `maxOutputTokens` | `32768` | 模型 output 上限兜底 |
 
+## 安全边界
+
+下面这些都在代码里强制，`npm test` 逐一覆盖：
+
+- **只有官方网关是目的地。** `loader.fetch` 会把请求的 origin 与 `https://llm-api.atomgit.com` 比对，不一致就直接报错拒绝——**在**加任何凭证与签名头**之前**。`origin` 含协议，所以 `http://` 明文降级同样被拒。
+- **上游改不动目的地。** 模型行里的 `base_url` 只有 origin 与签名网关完全一致时才被采纳，否则该模型回退官方网关并记录日志。
+- **端点选项走白名单。** `platformBaseURL`、`codingPlanAPIURL` 必须是 `atomgit.com` / `gitcode.com` 下的 https 地址，否则回退官方端点并告警。被塞改的 `plugins.json` 因此无法把你的 bearer / refresh token 引到别处。
+- **读取有上限、跳转被拒绝。** 版本、OAuth、CodingPlan 的响应体都在流式读取时限制为 1 MiB；所有元数据请求都有超时且拒绝跳转。broker 返回的登录地址也必须位于 AtomGit。
+
+凭证存在 magpie 自己的 `plugin-auth.json` 里：本插件不写、不打印、不进日志，只会发往上面那两组官方域名。
+
+### 装完就在跑的默认行为
+
+两个默认开关都是开的，且都会在没被要求的情况下动手：
+
+| 默认 | 实际动作 | 关闭方式 |
+|---|---|---|
+| `autoClaim: true` | 登录后在后台启动 CodingPlan `claim-v2`；套餐到期时再执行幂等重领 | `magpie plugin options atomcode '{"autoClaim":false}'` |
+| `autoVersion: true` | 后台刷新 `raw.atomgit.com` 的版本清单（缓存 12 小时）。请求立即使用当前缓存版本，拿不到时使用内置兜底 | `magpie plugin options atomcode '{"autoVersion":false}'` |
+
+## 排障
+
+登录或 `provider test` 遇到 401 时：
+
+1. 运行 `magpie version`，确认失败阶段是 OAuth 回调、模型目录、额度还是真实对话请求。
+2. 用同一账号运行官方 AtomCode 客户端的 `atomcode login`。若官方客户端也返回 401，更可能是上游账号风控，而不是插件。
+3. 提交 Bug 时附上脱敏日志。不要提供 access token、refresh token、OAuth state、`plugin-auth.json`、邮箱、账号 ID 或未脱敏的用户目录。
+
+安全问题请按 [SECURITY.md](SECURITY.md) 私密报告；开发与审查约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 开发
 
 ```bash
-npm test        # node --test，27 用例（亦兼容 bun test）
+npm test                    # node --test，85 用例
+npm run test:coverage       # Node 内置覆盖率报告
+npm run pack:check          # 检查 npm 发布包内容
 ```
+
+CI 会在 Node 20、22、24 与 Bun 上运行测试，执行覆盖率门禁，并对 npm 包做导入和打包冒烟。
 
 沙箱验证（不碰真实配置）：
 
 ```bash
 SB=$(mktemp -d)
+PLUGIN_ROOT="$(pwd)"
 sb() { env HOME="$SB" USERPROFILE="$SB" XDG_CONFIG_HOME="$SB/.config" XDG_CACHE_HOME="$SB/.cache" \
   MAGPIE_ADDR=127.0.0.1:3499 MAGPIE_PLUGIN_MARKET=off magpie "$@"; }
-sb plugin add "C:\path\to\magpie-atomcode"
+sb plugin add "$PLUGIN_ROOT"
 sb provider test atomcode
 sb quota
 ```

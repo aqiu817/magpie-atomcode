@@ -31,7 +31,9 @@ import {
   PROVIDER,
   credentialsOf,
   fellBack,
+  originOf,
   readAuth,
+  trustedServiceURL,
 } from "./internal.mjs";
 import { MASTER_KEY_HEX, signAtomGitRequest } from "./sign.mjs";
 import {
@@ -66,34 +68,86 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @returns {Promise<object>} the hooks the host calls.
  */
 export async function AtomCodePlugin({ client } = {}, options = {}) {
+  options = options && typeof options === "object" ? options : {};
   const t = tableFor(resolveLocale(options.locale));
 
+  /** Options that were rejected while reading; reported once `log` exists. */
+  const optionWarnings = [];
+  const warnInvalid = (name, value) =>
+    optionWarnings.push({ key: "optionInvalid", name, value: String(value) });
+  const positiveInteger = (name, value, fallback, max = Number.MAX_SAFE_INTEGER) => {
+    const parsed = Number(value);
+    if (Number.isInteger(parsed) && parsed > 0 && parsed <= max) return parsed;
+    if (value !== undefined) warnInvalid(name, value);
+    return fallback;
+  };
+
+  const configuredVersion = options.clientVersion;
+  const clientVersion =
+    typeof configuredVersion === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(configuredVersion.trim())
+      ? configuredVersion.trim()
+      : DEFAULT_CLIENT_VERSION;
+  if (configuredVersion !== undefined && clientVersion === DEFAULT_CLIENT_VERSION) {
+    const accepted =
+      typeof configuredVersion === "string" &&
+      configuredVersion.trim() === DEFAULT_CLIENT_VERSION;
+    if (!accepted) warnInvalid("clientVersion", configuredVersion);
+  }
+
+  const configuredMasterKey = String(options.masterKeyHex ?? "");
+  const masterKeyHex = /^[0-9a-fA-F]{64}$/.test(configuredMasterKey)
+    ? configuredMasterKey
+    : MASTER_KEY_HEX;
+  if (options.masterKeyHex !== undefined && masterKeyHex === MASTER_KEY_HEX && configuredMasterKey !== MASTER_KEY_HEX) {
+    warnInvalid("masterKeyHex", configuredMasterKey);
+  }
+
+  if (options.autoVersion !== undefined && typeof options.autoVersion !== "boolean") {
+    warnInvalid("autoVersion", options.autoVersion);
+  }
+  if (options.autoClaim !== undefined && typeof options.autoClaim !== "boolean") {
+    warnInvalid("autoClaim", options.autoClaim);
+  }
+
   const opts = {
-    clientVersion:
-      typeof options.clientVersion === "string" && options.clientVersion
-        ? options.clientVersion
-        : DEFAULT_CLIENT_VERSION,
+    clientVersion,
     // 逃生口：上游换 master key 时不发版热修（对齐 Atom2Api 的 signer_url 思路）。
-    masterKeyHex: /^[0-9a-fA-F]{64}$/.test(String(options.masterKeyHex ?? ""))
-      ? options.masterKeyHex
-      : MASTER_KEY_HEX,
-    platformBaseURL:
-      typeof options.platformBaseURL === "string" && options.platformBaseURL
-        ? options.platformBaseURL
-        : DEFAULT_PLATFORM_BASE_URL,
-    codingPlanAPIURL:
-      typeof options.codingPlanAPIURL === "string" && options.codingPlanAPIURL
-        ? options.codingPlanAPIURL
-        : DEFAULT_CODING_PLAN_API_URL,
+    masterKeyHex,
+    // 端点选项可覆盖，但必须是 https 且落在上游自家域名族：token 会发往这里，
+    // 一份被塞改的 plugins.json 不该能把它引到别处。
+    platformBaseURL: trustedServiceURL(options.platformBaseURL, {
+      fallback: DEFAULT_PLATFORM_BASE_URL,
+      onReject: (value) =>
+        optionWarnings.push({ key: "endpointDenied", name: "platformBaseURL", value }),
+    }),
+    codingPlanAPIURL: trustedServiceURL(options.codingPlanAPIURL, {
+      fallback: DEFAULT_CODING_PLAN_API_URL,
+      onReject: (value) =>
+        optionWarnings.push({ key: "endpointDenied", name: "codingPlanAPIURL", value }),
+    }),
     gatewayURL: DEFAULT_GATEWAY_BASE_URL,
-    quotaTtlMs: Number(options.quotaTtlMs) > 0 ? Number(options.quotaTtlMs) : 60_000,
-    maxOutputTokens: Number(options.maxOutputTokens) > 0 ? Number(options.maxOutputTokens) : 32_768,
+    quotaTtlMs: positiveInteger("quotaTtlMs", options.quotaTtlMs, 60_000, 24 * 3600_000),
+    maxOutputTokens: positiveInteger(
+      "maxOutputTokens",
+      options.maxOutputTokens,
+      32_768,
+      1_000_000,
+    ),
     // 官方客户端发新版会强制更新 → 版本新鲜度大概率影响网关放行；默认自动跟随
     // 官方仓库版本，拉取失败退回 clientVersion，绝不阻塞请求。
     autoVersion: options.autoVersion !== false,
     // 登录成功后按 Max→Pro→Lite 幂等领取 CodingPlan（重复领取上游返回 duplicate）。
     autoClaim: options.autoClaim !== false,
   };
+
+  /**
+   * The only origin requests may leave for.
+   *
+   * `origin` covers scheme + host + port, so an `http://` downgrade of the same
+   * host cannot pass this comparison either.
+   */
+  const gatewayOrigin = originOf(opts.gatewayURL);
 
   const log = (level, message) => {
     try {
@@ -103,10 +157,18 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
     }
   };
 
+  for (const warning of optionWarnings) {
+    log(
+      "warn",
+      `${PROVIDER}: ${fill(t[warning.key], { name: warning.name, detail: warning.value })}`,
+    );
+  }
+
   const catalog = createCatalog({
     apiBase: opts.codingPlanAPIURL,
     clientVersion: opts.clientVersion,
     output: opts.maxOutputTokens,
+    onReject: (baseURL) => log("warn", `${PROVIDER}: ${fill(t.modelBaseUrlDenied, { detail: baseURL })}`),
   });
 
   const versionSource = createVersionSource({
@@ -257,12 +319,25 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
             log("warn", `${PROVIDER}: ${t.modelListEmpty}`);
             return fellBack(declared);
           }
-          return Object.fromEntries(
-            list.map((m) => [
-              m.key,
-              toProviderModel(m, PROVIDER, { baseURL: opts.gatewayURL, npm: NPM }),
-            ]),
-          );
+          const result = {};
+          for (const model of list) {
+            let key = model.key;
+            let suffix = 2;
+            while (Object.hasOwn(result, key)) {
+              key = `${model.key}_${suffix++}`;
+            }
+            if (key !== model.key) {
+              log(
+                "warn",
+                `${PROVIDER}: ${fill(t.modelKeyCollision, { detail: model.key, key })}`,
+              );
+            }
+            result[key] = toProviderModel({ ...model, key }, PROVIDER, {
+              baseURL: opts.gatewayURL,
+              npm: NPM,
+            });
+          }
+          return result;
         } catch (error) {
           if (error.signIn === "expired") throw markExpired();
           log("warn", `${PROVIDER}: ${t.modelsUnavailable}: ${error.message}`);
@@ -316,15 +391,19 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
                     // 签到闭环的最后一步（Atom2Api 登录后同款）：把计划领上。
                     // 幂等（重复领取返回 duplicate），失败只记日志、绝不拦登录。
                     if (opts.autoClaim) {
-                      try {
-                        const claim = await claimCodingPlan(opts.codingPlanAPIURL, token.accessToken, {
-                          clientVersion: await clientVersionNow(),
-                        });
-                        if (claim.claimed) log("info", `${PROVIDER}: coding plan: ${claim.planName || claim.tier}`);
-                        else log("warn", `${PROVIDER}: coding plan: ${claim.message}`);
-                      } catch (error) {
-                        log("warn", `${PROVIDER}: coding plan claim failed: ${error.message}`);
-                      }
+                      // Claiming is useful but must never delay a completed
+                      // sign-in. A later models/usage call retries idempotently.
+                      void (async () => {
+                        try {
+                          const claim = await claimCodingPlan(opts.codingPlanAPIURL, token.accessToken, {
+                            clientVersion: await clientVersionNow(),
+                          });
+                          if (claim.claimed) log("info", `${PROVIDER}: coding plan: ${claim.planName || claim.tier}`);
+                          else log("warn", `${PROVIDER}: coding plan: ${claim.message}`);
+                        } catch (error) {
+                          log("warn", `${PROVIDER}: coding plan claim failed: ${error.message}`);
+                        }
+                      })();
                     }
                     return {
                       type: "success",
@@ -355,11 +434,23 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
        *
        * The returned `fetch` is the only place bodies get touched — they are
        * read (to sign) but never modified; responses stream back untouched.
+       * A request aimed anywhere but the gateway is refused outright, before
+       * any credential is attached to it.
        */
       async loader(getAuth) {
         return {
           baseURL: opts.gatewayURL,
           async fetch(input, init) {
+            const isRequest = input instanceof Request;
+            const target = new URL(isRequest ? input.url : String(input));
+            // Nothing leaves for anywhere but the gateway: the credential and
+            // the signature headers are only ever meant for that one origin.
+            if (target.origin !== gatewayOrigin) {
+              const blocked = fill(t.foreignTargetBlocked, { origin: target.origin });
+              log("warn", `${PROVIDER}: ${blocked}`);
+              throw new Error(blocked);
+            }
+
             // Re-read per request so a sign-in that changes mid-session is
             // picked up without waiting for the loader to re-run.
             const raw = await readAuth(getAuth);
@@ -367,11 +458,10 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
             if (!credentials) {
               // No signed-in account: ship the request without credentials and
               // let the upstream's own answer tell the agent what happened.
-              const isRequest = input instanceof Request;
               const headers = new Headers(init?.headers ?? (isRequest ? input.headers : undefined));
               headers.delete("authorization");
-              if (isRequest) return fetch(new Request(input, { ...init, headers }));
-              return fetch(input, { ...init, headers });
+              if (isRequest) return fetch(new Request(input, { ...init, headers, redirect: "error" }));
+              return fetch(input, { ...init, headers, redirect: "error" });
             }
 
             // Fallback renewal (Magpie's native auth.refresh normally runs first
@@ -402,7 +492,6 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
             // UA、X-AtomCode-Ver、签名盐同源自这一个值
             const clientVersion = await clientVersionNow();
 
-            const isRequest = input instanceof Request;
             const headers = new Headers(init?.headers ?? (isRequest ? input.headers : undefined));
 
             // Hash what is actually being sent. Magpie hands a JSON string in
@@ -415,7 +504,7 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
 
             const signed = signAtomGitRequest({
               method: init?.method ?? (isRequest ? input.method : "GET"),
-              path: new URL(isRequest ? input.url : String(input)).pathname,
+              path: target.pathname,
               body,
               oauthToken: credentials.access,
               userId: credentials.uid,
@@ -427,8 +516,8 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
             headers.set("user-agent", userAgentOf(clientVersion));
 
             // body 与响应都不改写（流式逐块透传是 Magpie 的本职）。
-            if (isRequest) return fetch(new Request(input, { ...init, headers }));
-            return fetch(input, { ...init, headers });
+            if (isRequest) return fetch(new Request(input, { ...init, headers, redirect: "error" }));
+            return fetch(input, { ...init, headers, redirect: "error" });
           },
         };
       },
@@ -503,7 +592,12 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
           });
           if (!planNeedsClaim(status)) {
             const plan = status?.codingplan_free ?? status?.plan ?? {};
-            return { outcome: "done", message: fill(t.checkinDone, {}) + (plan.plan_name ? `（${plan.plan_name}）` : "") };
+            return {
+              outcome: "done",
+              message: plan.plan_name
+                ? fill(t.checkinDoneWithPlan, { plan: plan.plan_name })
+                : t.checkinDone,
+            };
           }
         } catch (error) {
           if (error.signIn === "expired") return { outcome: "failed", message: t.reloginRequired };
@@ -517,7 +611,12 @@ export async function AtomCodePlugin({ client } = {}, options = {}) {
             return { outcome: "failed", message: claim.message || fill(t.reclaimFailed, { detail: "no tier" }) };
           }
           if (claim.duplicate) {
-            return { outcome: "done", message: fill(t.checkinDone, {}) + (claim.planName ? `（${claim.planName}）` : "") };
+            return {
+              outcome: "done",
+              message: claim.planName
+                ? fill(t.checkinDoneWithPlan, { plan: claim.planName })
+                : t.checkinDone,
+            };
           }
           return {
             outcome: "claimed",

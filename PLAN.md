@@ -1,7 +1,7 @@
 # magpie-atomcode 插件制作规划
 
-- 版本：v1.5（2026-10-16）
-- 状态：**已发布 GitHub（M5 路线 A 部分完成）**——仓库 https://github.com/aqiu817/magpie-atomcode ，main 分支，topic `magpie-plugin`（另附 atomcode/atomgit/codingplan/opencode）；README 默认英文（中文移至 README.zh-CN.md）；显示名 ATOMCODE；27/27 单测、真机 checkin=true。剩余可选：npm 发布与 registry.json PR、深度单测补全
+- 版本：v1.6（2026-11-01）
+- 状态：**GitHub 已发布，维护加固完成**——仓库 https://github.com/aqiu817/magpie-atomcode ，main 分支，topic `magpie-plugin`；显示名 ATOMCODE；85/85 单测，行覆盖率 92.1%、函数覆盖率 90.9%；新增 Node/Bun CI、覆盖率门禁、安全/协作文档与 npm 打包冒烟。剩余外部动作：npm 发布、registry.json PR 与真实账号回归
 - 目标产物：magpie 供应商插件 `magpie-atomcode` —— 让所有 Agent 通过 magpie 使用 AtomCode（AtomGit CodingPlan）的模型，写作 `atomcode/<模型>`
 
 ---
@@ -379,7 +379,7 @@ sb plugin logout atomcode
 **基线在线核对（2026-10-16 晚）：** Atom2Api HEAD 仍为 2ba2299（2026-08-17；最新 10 条提交全为账号/路由/UI 类，签名 / OAuth / CodingPlan 协议层无变化），README.zh-CN.md 与本地快照逐字一致，3 个 open issue 均为账号风控/偶发 429 类、无协议报障；magpie 官方插件指南现网页面与本地快照全文一致（14 哨兵点 SAME）。协议层无需调整。
 
 **补充定稿（2026-10-16 深夜，决策 ⑤⑥）：**
-- **⑤ 自动追版本（默认开）**：官方客户端发新版会强制更新 → 网关大概率拒绝久远版本（版本轨迹 4.23.1 / 4.25.0 / 5.0.2 / 5.2.3 印证它一直在漂移；Atom2Api 单独写 UA checker 印证作者判断）。插件默认拉官方仓库 `Cargo.toml` 的 `workspace.package.version`（TTL 12h、失败 5min 后重试、退回 `clientVersion` 常量、唯一一次冷启动等待、其余绝不阻塞请求）；实现 `version.mjs`，UA / `X-AtomCode-Ver` / 签名盐同一取值。`autoVersion: false` 锁定常量。
+- **⑤ 自动追版本（默认开）**：官方客户端发新版会强制更新 → 网关大概率拒绝久远版本（版本轨迹 4.23.1 / 4.25.0 / 5.0.2 / 5.2.3 印证它一直在漂移；Atom2Api 单独写 UA checker 印证作者判断）。插件默认拉官方仓库 `Cargo.toml` 的 `workspace.package.version`（TTL 12h、失败 5min 后重试、退回 `clientVersion` 常量；刷新始终在后台，请求从不等待清单）；实现 `version.mjs`，UA / `X-AtomCode-Ver` / 签名盐同一取值。`autoVersion: false` 锁定常量。
 - **⑥ 登录闭环补幂等领取（默认开）**：Atom2Api 在换完 token 后立即按 Max→Pro→Lite 领取 `claim-v2`（success/duplicate 即停；错误体解 message）。插件登录 callback 同款（失败只记日志不拦登录）；`autoClaim: false` 关闭。
 - 验收快照（2026-10-16 深夜）：`node --test` 17/17 绿（version + codingplan/claim）；签名 fixture MATCH；插件在 magpie 0.1.1267 沙箱重新加载验收通过（provides `atomcode`、2 models、`maxConcurrency:4`、`usage:true`、无加载错误）。测试套件剩余：sign / oauth / models / quota / i18n / plugin hooks。
 

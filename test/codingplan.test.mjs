@@ -114,16 +114,34 @@ test("planNeedsClaim：expires_at 过期超 24h → 需要重领；24h 宽限内
   );
 });
 
-test("claim：网络异常只记 attempt，绝不抛出", async () => {
+test("claim：网络异常只尝试一次，不把三档当三次重试", async () => {
+  let calls = 0;
   const r = await claimCodingPlan("https://gitcode.example", "tok", {
     fetchImpl: async () => {
+      calls += 1;
       throw new Error("boom");
     },
     clientVersion: "5.2.3",
   });
   assert.equal(r.claimed, false);
-  assert.equal(r.attempts.length, 3);
+  assert.equal(calls, 1);
+  assert.equal(r.attempts.length, 1);
   assert.match(r.message, /boom/);
+});
+
+test("claim：429/5xx/401 不继续尝试其他档位", async () => {
+  for (const status of [401, 429, 503]) {
+    let calls = 0;
+    const r = await claimCodingPlan("https://gitcode.example", "tok", {
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ message: "stop" }), { status });
+      },
+      clientVersion: "5.2.3",
+    });
+    assert.equal(calls, 1, `HTTP ${status} should stop the cascade`);
+    assert.equal(r.claimed, false);
+  }
 });
 
 test("fetchModels：plan_type 编码进 query，过滤空名/不可用/弃用行", async () => {
